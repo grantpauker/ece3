@@ -1,8 +1,11 @@
-#include <ECE3.h> 
+#include "QTRSensors.h"
+#include <Arduino.h>
 
 #define ENCODER_DT 50.e3
 
-
+// Pins
+#define ENC_LEFT 12
+#define ENC_RIGHT 13
 
 #define LEFT_NSLP 31
 #define RIGHT_NSLP 11
@@ -16,106 +19,153 @@
 #define BUMP_0 24
 #define LED_RF 41
 
+// Variables
+int16_t cur_left_pwm = 0;
+int16_t cur_right_pwm = 0;
+
+unsigned long left_encoder_count = 0;
+unsigned long right_encoder_count = 0;
+
+QTRSensors IR;
+
+uint16_t sensor_values[8] = {0};
+uint16_t minimum_values[8] = {0};                // TODO tune
+float weights[8] = {-4, -3, -2, -1, 1, 2, 3, 4}; // TODO tune
+float weighted_values[8] = {0};
+
 unsigned long last_encoder_timestamp;
 
-unsigned long left_encoder_count;
-unsigned long right_encoder_count;
 unsigned long last_left_encoder_count;
 unsigned long last_right_encoder_count;
 
-long left_encoder_velocity;
-long right_encoder_velocity;
-
-void set_left_pwm(int speed){
-  digitalWrite(LEFT_NSLP,HIGH);
-  digitalWrite(LEFT_DIR, speed < 0);
-  analogWrite(LEFT_PWM, abs(speed));
-}
-
-void set_right_pwm(int speed){
-  digitalWrite(RIGHT_NSLP,HIGH);
-  digitalWrite(RIGHT_DIR, speed < 0);
-  analogWrite(RIGHT_PWM, abs(speed));
-}
-
-void stop_left(bool brake){
-  digitalWrite(LEFT_PWM, 0);
-  digitalWrite(LEFT_NSLP, brake);
-}
-
-void stop_right(bool brake){
-  digitalWrite(RIGHT_PWM, 0);
-  digitalWrite(RIGHT_NSLP, brake);
-}
-
-
-void setup() {
-  pinMode(LEFT_NSLP,OUTPUT);
-  pinMode(LEFT_DIR,OUTPUT);
-  pinMode(LEFT_PWM ,OUTPUT);
-  pinMode(BUMP_0,INPUT_PULLUP);
-  pinMode(LED_RF, OUTPUT);
-
-  digitalWrite(LEFT_NSLP,HIGH);
-  digitalWrite(RIGHT_NSLP,HIGH);
-  
-  last_encoder_timestamp = micros();
-
-  ECE3_Init();
-  resetEncoderCount_left();
-
-  Serial.begin(19200);
-  
-  delay(2000);
-}
-
-uint16_t sensor_values[8] = {0};
-uint16_t minimum_values[8] = {0};
-float  weighted_values[8] = {0};
+float left_vel = 0.0;
+float right_vel = 0.0;
 
 float error;
 float last_error;
 
-float kp = 100;
-float kd = 20;
-float speed = 75;
-float weights[8] = {-4, -3, -2, -1, 1, 2, 3, 4};
+float turn_kp = 100.0; // TODO tune
+float turn_kd = 20.0;  // TODO tune
+float speed = 75.0;    // TODO tune
 
-float get_error(){
-  ECE3_read_IR(sensor_values);
+// Left encoder interrupt
+void inc_encoder_count_left()
+{
+  left_encoder_count += cur_left_pwm >= 0 ? 1 : -1;
+}
+
+// Right encoder interrupt
+void inc_encoder_count_right()
+{
+  right_encoder_count += cur_right_pwm >= 0 ? 1 : -1;
+}
+
+// Set left pwm output to cur_right_pwm
+void set_left_pwm()
+{
+  digitalWrite(LEFT_NSLP, HIGH);
+  digitalWrite(LEFT_DIR, cur_left_pwm < 0);
+  analogWrite(LEFT_PWM, abs(cur_left_pwm));
+}
+
+// Set right pwm output to cur_right_pwm
+void set_right_pwm()
+{
+  digitalWrite(RIGHT_NSLP, HIGH);
+  digitalWrite(RIGHT_DIR, cur_right_pwm < 0);
+  analogWrite(RIGHT_PWM, abs(cur_right_pwm));
+}
+
+// Stop left motor
+void stop_left(bool brake)
+{
+  cur_left_pwm = 0.0;
+  digitalWrite(LEFT_PWM, 0);
+  digitalWrite(LEFT_NSLP, brake);
+}
+
+// Stop right motor
+void stop_right(bool brake)
+{
+  cur_right_pwm = 0.0;
+  digitalWrite(RIGHT_PWM, 0);
+  digitalWrite(RIGHT_NSLP, brake);
+}
+
+// Get the offset error using the IR sensors
+float get_error()
+{
   float error = 0;
-  for(int i = 0; i < 8; i++){
+  for (int i = 0; i < 8; i++)
+  {
     sensor_values[i] -= minimum_values[i];
-
-    weighted_values[i] = (sensor_values[i]/1000.)*weights[i];
+    weighted_values[i] = (sensor_values[i] / 1000.) * weights[i];
     error += weighted_values[i];
-    Serial.print(weighted_values[i]);
-    Serial.print(", ");
   }
-   Serial.print(error);
-  Serial.println();
   error /= 8;
 
   return error;
 }
 
-void loop() {
-  unsigned long cur_timestamp = micros();
-  
-  float error = get_error();
-  float output = error * kp + (error - last_error ) * kd;
-  last_error = error;
-  
-  set_left_pwm(speed - output);
-  set_right_pwm(speed + output);
+void setup()
+{
+  pinMode(ENC_LEFT, INPUT);
+  pinMode(ENC_RIGHT, INPUT);
 
-  if(cur_timestamp - last_encoder_timestamp > ENCODER_DT) { 
-    left_encoder_count = getEncoderCount_left();
-    right_encoder_count = getEncoderCount_right();
-    left_encoder_velocity = left_encoder_count - last_left_encoder_count;
-    right_encoder_velocity = right_encoder_count - last_right_encoder_count;
+  pinMode(LEFT_NSLP, OUTPUT);
+  pinMode(LEFT_DIR, OUTPUT);
+  pinMode(LEFT_PWM, OUTPUT);
+  pinMode(RIGHT_NSLP, OUTPUT);
+  pinMode(RIGHT_DIR, OUTPUT);
+  pinMode(RIGHT_PWM, OUTPUT);
+
+  pinMode(BUMP_0, INPUT_PULLUP);
+
+  pinMode(LED_RF, OUTPUT);
+
+  attachInterrupt(ENC_LEFT, inc_encoder_count_left, FALLING);
+  attachInterrupt(ENC_RIGHT, inc_encoder_count_right, FALLING);
+
+  digitalWrite(LEFT_NSLP, HIGH);
+  digitalWrite(RIGHT_NSLP, HIGH);
+
+  last_encoder_timestamp = micros();
+
+  IR.setSensorPins((const uint8_t[]){65, 48, 64, 47, 52, 68, 53, 69}, 8);
+  IR.setEmitterPins(45, 61);
+  IR.setTimeout(2500);
+
+  Serial.begin(19200);
+  delay(2000);
+}
+
+void loop()
+{
+  unsigned long cur_timestamp = micros();
+
+  IR.read(sensor_values);
+
+  // Calculate turn PID output
+  float error = get_error();
+  float turn = error * turn_kp + (error - last_error) * turn_kd;
+  last_error = error;
+
+  // Calculate/set pwm signals
+  cur_left_pwm = speed + turn;
+  cur_right_pwm = speed - turn;
+
+  set_left_pwm();
+  set_right_pwm();
+
+  // Calculate encoder velocities
+  if (cur_timestamp - last_encoder_timestamp > ENCODER_DT)
+  {
+    left_vel = (left_encoder_count - last_left_encoder_count) / ENCODER_DT;
+    right_vel = (right_encoder_count - right_encoder_count) / ENCODER_DT;
+
     last_left_encoder_count = left_encoder_count;
     last_right_encoder_count = right_encoder_count;
+
     last_encoder_timestamp = cur_timestamp;
   }
 }
