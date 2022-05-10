@@ -28,8 +28,9 @@ unsigned long right_encoder_count = 0;
 
 QTRSensors IR;
 
-uint16_t sensor_values[8] = {0};
-uint16_t minimum_values[8] = {0};                // TODO tune
+int16_t sensor_values[8] = {0};
+uint16_t minimum_values[8] = {689, 589, 736, 643, 735, 712, 782, 805};
+uint16_t maximum_values[8] = {1811, 1688, 1764, 1420, 1448, 1788, 1718, 1695};
 float weights[8] = {-4, -3, -2, -1, 1, 2, 3, 4}; // TODO tune
 float weighted_values[8] = {0};
 
@@ -44,9 +45,9 @@ float right_vel = 0.0;
 float error;
 float last_error;
 
-float turn_kp = 100.0; // TODO tune
-float turn_kd = 20.0;  // TODO tune
-float speed = 75.0;    // TODO tune
+float turn_kp = 0.175; // TODO tune
+float turn_kd = 3.5;   // TODO tune
+float speed = 125.0;   // TODO tune
 
 // Left encoder interrupt
 void inc_encoder_count_left()
@@ -98,10 +99,14 @@ float get_error()
   float error = 0;
   for (int i = 0; i < 8; i++)
   {
+    Serial.print(sensor_values[i]);
+    Serial.print("\t");
     sensor_values[i] -= minimum_values[i];
-    weighted_values[i] = (sensor_values[i] / 1000.) * weights[i];
+
+    weighted_values[i] = (sensor_values[i]) * 1000.0 / maximum_values[i] * weights[i];
     error += weighted_values[i];
   }
+  Serial.println();
   error /= 8;
 
   return error;
@@ -136,24 +141,25 @@ void setup()
   IR.setTimeout(2500);
 
   Serial.begin(19200);
-  delay(2000);
+  // delay(2000);
 }
 
 void loop()
 {
   unsigned long cur_timestamp = micros();
 
-  IR.read(sensor_values);
+  IR.read((uint16_t *)sensor_values);
 
   // Calculate turn PID output
-  float error = get_error();
+  float error = (get_error() + last_error) / 2;
   float turn = error * turn_kp + (error - last_error) * turn_kd;
   last_error = error;
 
   // Calculate/set pwm signals
-  cur_left_pwm = speed + turn;
-  cur_right_pwm = speed - turn;
-
+  cur_left_pwm = speed - turn;
+  cur_right_pwm = speed + turn;
+  // cur_left_pwm = cur_right_pwm = 0;
+  
   set_left_pwm();
   set_right_pwm();
 
