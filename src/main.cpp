@@ -34,10 +34,12 @@ enum Route
 };
 
 // Constants
-#define INIT_DELAY 2000
+#define INIT_DELAY 2e3
+#define TIME_GOAL 15e3
 
-#define SLOW_SPEED 100
-#define FAST_SPEED 200
+#define SLOW_SPEED 105
+#define FAST_SPEED 225
+#define TURN_SPEED 200
 
 #define TURN_KP 0.175
 #define TURN_KD 3.0
@@ -46,9 +48,9 @@ enum Route
 #define TURN_DIST 360
 
 #define FORWARD_FAST_START 1300
-#define FORWARD_FAST_END 4000
-#define BACKWARD_FAST_START 1100
-#define BACKWARD_FAST_END 4500
+#define FORWARD_FAST_END 4600
+#define BACKWARD_FAST_START 1200
+#define BACKWARD_FAST_END 4750
 
 uint16_t minimum_values[8] = {689, 589, 736, 643, 735, 712, 782, 805};
 uint16_t maximum_values[8] = {1811, 1688, 1764, 1420, 1448, 1788, 1718, 1695};
@@ -75,6 +77,9 @@ State cur_state = FOLLOW;
 Route route = FORWARD;
 
 uint16_t black_count = 0;
+
+int32_t start_time = 0;
+int32_t end_time = 0;
 
 // Left encoder interrupt
 void inc_encoder_count_left()
@@ -158,11 +163,11 @@ void setup()
 
   Serial.begin(9600);
   delay(INIT_DELAY);
+  start_time = millis();
 }
 
 void loop()
 {
-  unsigned long cur_timestamp = micros();
   IR.read((uint16_t *)sensor_values);
 
   int32_t distance = (left_encoder_count + right_encoder_count) / 2;
@@ -201,8 +206,8 @@ void loop()
   }
   else if (cur_state == TURN)
   {
-    cur_left_pwm = FAST_SPEED;
-    cur_right_pwm = -FAST_SPEED;
+    cur_left_pwm = TURN_SPEED;
+    cur_right_pwm = -TURN_SPEED;
   }
   else
   {
@@ -227,10 +232,22 @@ void loop()
     left_encoder_count = 0;
     right_encoder_count = 0;
     cur_state = TURN;
+    if (route == FORWARD)
+    {
+      cur_state = TURN;
+    }
+    else
+    {
+      cur_state = STOP;
+      end_time = millis();
+    }
   }
   else if (cur_state == TURN && left_encoder_count > TURN_DIST)
   {
     cur_state = FOLLOW;
     route = route == FORWARD ? BACKWARD : FORWARD;
   }
+
+  bool is_under_time = (cur_state == STOP) && (end_time - start_time) < TIME_GOAL;
+  digitalWrite(LED_FR, is_under_time);
 }
